@@ -1,0 +1,266 @@
+version: 2.1
+orbs:
+  aws-ecr: circleci/aws-ecr@6.15.3
+  aws-white-list-circleci-ip: inokappa/aws-sg-white-list-circleci-ip@0.0.3
+
+jobs:
+  checkout_code:
+    docker:
+      - image: circleci/python:3.8.0-node-browsers
+    working_directory: ~/test
+    steps:
+      - checkout
+      - run: ls -al ~/test/test/frontend/
+      - save_cache:
+          key: v0-repo-{{ .Environment.CIRCLE_SHA1 }}
+          paths:
+            - ~/test
+      
+  python_dependencies:
+    docker:
+      - image: circleci/python:3.8.0-node-browsers
+    working_directory: ~/test
+    steps:
+      - restore_cache:
+          keys:
+            - v0-repo-{{ .Environment.CIRCLE_SHA1 }}
+      - restore_cache:
+          keys:
+            - v0-dependencies-{{ checksum "requirements.txt" }}
+      - run: |
+          python3 -m venv venv
+          . venv/bin/activate
+          pip install -r requirements.txt
+      - save_cache:
+          key: v0-dependencies-{{ checksum "requirements.txt" }}
+          paths:
+            - ./venv
+
+  django_test:
+    docker:
+      - image: circleci/python:3.8.0-node-browsers
+      - image: circleci/postgres:latest-postgis-ram
+        environment:
+          - POSTGRES_USER: root
+          - POSTGRES_PASSWORD: 123
+    working_directory: ~/test
+    steps:
+      - run:
+          name: Download Selenium
+          command: |
+            curl -O http://selenium-release.storage.googleapis.com/3.5/selenium-server-standalone-3.5.3.jar
+      - run:
+          name: Start Selenium
+          command: |
+            java -jar selenium-server-standalone-3.5.3.jar -log selenium.log
+          background: true
+      - run:
+          name: Update Chromedriver
+          command: |
+            sudo apt-get --allow-releaseinfo-change update
+            wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+            sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list'
+            sudo apt-get -y update
+            sudo apt-get -y install google-chrome-stable
+      - restore_cache:
+          keys:
+          - v0-repo-{{ .Environment.CIRCLE_SHA1 }}
+      - restore_cache:
+          keys:
+          - v0-dependencies-{{ checksum "requirements.txt" }}
+      - run:
+          name: Install dependencies
+          command: |
+            sudo apt-get update && sudo apt-get install binutils libproj-dev gdal-bin
+      - run:
+          name: Waiting for Postgres to be ready
+          command: |
+            for i in `seq 1 10`;
+            do
+              nc -z localhost 5432 && echo Success && exit 0
+              echo -n .
+              sleep 1
+            done
+            echo Failed waiting for Postgres && exit 1
+      - run:
+          name: migrate db
+          command: |
+            . venv/bin/activate
+            cd test
+            python manage.py migrate
+      - run:
+          name: Run tests
+          no_output_timeout: 20m
+          command: |
+            . venv/bin/activate
+            cd test
+            python manage.py test -v2 --keepdb
+
+  js_dependencies:
+    docker:
+      - image: circleci/python:3.8.0-node
+    working_directory: ~/test/test/frontend
+    steps:
+      - restore_cache:
+          keys:
+            - v0-repo-{{ .Environment.CIRCLE_SHA1 }}
+      - restore_cache:
+          keys:
+            - v0-npm-bundle-{{ checksum "package-lock.json" }}
+      - run: npm install
+      - save_cache:
+          key: v0-npm-bundle-{{ checksum "package-lock.json" }}
+          paths:
+            - ./node_modules
+
+  compile_assets:
+    docker:
+      - image: circleci/python:3.8.0-node
+    working_directory: ~/test/test/frontend
+    steps:
+      - restore_cache:
+          keys:
+            - v0-repo-{{ .Environment.CIRCLE_SHA1 }}
+      - restore_cache:
+          keys:
+            - v0-npm-bundle-{{ checksum "package-lock.json" }}
+      - run: npm run build
+      - run:
+          name: Install SASS & Compile
+          command: |
+            npm install sass
+            ./node_modules/.bin/sass ../website/static/scss/custom.scss ../website/static/css/custom.min.css
+      - save_cache:
+          key: v0-assets-{{ .Environment.CIRCLE_SHA1 }}
+          paths:
+            - ./build
+            - ./django
+      - save_cache:
+          key: v0-sass-{{ .Environment.CIRCLE_SHA1 }}
+          paths:
+            - ./node_modules
+            - ../website/static/css/custom.min.css
+
+  test_build_image:
+    machine:
+        docker_layer_caching: true
+        enabled: true
+    working_directory: ~/test
+    steps:
+      - restore_cache:
+          keys:
+            - v0-repo-{{ .Environment.CIRCLE_SHA1 }}
+      - restore_cache:
+          keys:
+            - v0-dependencies-{{ checksum "requirements.txt" }}
+      - restore_cache:
+          keys:
+            - v0-assets-{{ .Environment.CIRCLE_SHA1 }}
+      - restore_cache:
+          keys:
+            - v0-sass-{{ .Environment.CIRCLE_SHA1 }}
+      - aws-ecr/build-image:
+          account-url: AWS_ECR_ACCOUNT_URL
+          dockerfile: Dockerfile
+          repo: admin.flat.mx
+          tag: 'latest,${CIRCLE_SHA1}'
+
+  upload_image:
+    machine:
+        enabled: true
+        docker_layer_caching: true
+    working_directory: ~/test
+    steps:
+      - restore_cache:
+          keys:
+            - v0-repo-{{ .Environment.CIRCLE_SHA1 }}
+      - restore_cache:
+          keys:
+            - v0-dependencies-{{ checksum "requirements.txt" }}
+      - restore_cache:
+          keys:
+            - v0-assets-{{ .Environment.CIRCLE_SHA1 }}
+      - restore_cache:
+          keys:
+            - v0-sass-{{ .Environment.CIRCLE_SHA1 }}
+      - aws-ecr/build-and-push-image:
+          account-url: AWS_ECR_ACCOUNT_URL
+          aws-access-key-id: AWS_ACCESS_KEY_ID
+          aws-secret-access-key: AWS_SECRET_ACCESS_KEY
+          dockerfile: Dockerfile
+          region: AWS_REGION
+          repo: admin.flat.mx
+          tag: 'latest,${CIRCLE_SHA1}'
+
+  deploy_staging:
+    machine:
+        enabled: true
+    steps:
+      - aws-white-list-circleci-ip/add:
+          port: 22
+      - run: ssh ubuntu@3.221.72.42 "docker login -u AWS -p $(aws ecr get-login-password --region us-east-1) https://711300859214.dkr.ecr.us-east-1.amazonaws.com && docker pull 711300859214.dkr.ecr.us-east-1.amazonaws.com/admin.flat.mx:latest && docker-compose up -d"
+      - aws-white-list-circleci-ip/del:
+          port: 22
+
+  deploy_prod:
+    machine:
+        enabled: true
+    steps:
+      - aws-white-list-circleci-ip/add:
+          port: 22
+      - run: ssh ubuntu@52.205.115.138 "docker login -u AWS -p $(aws ecr get-login-password --region us-east-1) https://711300859214.dkr.ecr.us-east-1.amazonaws.com && docker pull 711300859214.dkr.ecr.us-east-1.amazonaws.com/admin.flat.mx:latest && docker-compose up -d --scale celeryworker=3"
+      - aws-white-list-circleci-ip/del:
+          port: 22
+
+workflows:
+  version: 2
+  build-and-deploy:
+    jobs:
+      - checkout_code
+      - python_dependencies:
+          requires:
+            - checkout_code
+      - django_test:
+          requires:
+            - python_dependencies
+      - js_dependencies:
+          requires:
+            - checkout_code
+      - compile_assets:
+          requires:
+            - js_dependencies
+      - test_build_image:
+          filters:
+            branches:
+              ignore:
+                - master
+                - staging
+                - staging-website
+          requires:
+            - django_test
+            - compile_assets
+      - upload_image:
+          filters:
+            branches:
+              only:
+                - master
+                - staging
+                - staging-website
+          requires:
+            - django_test
+            - compile_assets
+      - deploy_staging:
+          filters:
+            branches:
+              only:
+                - staging
+                - staging-website
+          requires:
+            - upload_image
+      - deploy_prod:
+          filters:
+            branches:
+              only:
+                - master
+          requires:
+            - upload_image
