@@ -8,7 +8,7 @@
 
 ## WDEC
 
-Wdec is a dockerized development environment for Watson, it's an easier and production-like way for development enviroment installation. Please refer to the repo for installation intructions: https://github.com/FlatDigital/wdec
+Wdec is a dockerized development environment for Watson, it's an easier and production-like way for development enviroment installation.
 
 If you prefer to go for a local installation and manually install the requirements you can find a really helpful guide in the next section "Local setup"
 
