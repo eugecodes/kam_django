@@ -288,13 +288,13 @@ Also, make sure you configured the AWS CLI (use us-east-1):
 # Build frontend files
 cd frontend && npm run build
 
-docker build -t admin.flat.mx . && docker tag admin.flat.mx:latest 711300859214.dkr.ecr.us-east-1.amazonaws.com/admin.flat.mx:latest
+docker build -t admin.test.com . && docker tag admin.test.com:latest 711300859214.dkr.ecr.us-east-1.amazonaws.com/admin.test.com:latest
 
 # Make sure you configured the AWS CLI (use us-east-1):
 aws configure
 
 $(aws ecr get-login --no-include-email --region us-east-1) && 
-docker push 711300859214.dkr.ecr.us-east-1.amazonaws.com/admin.flat.mx:latest
+docker push 711300859214.dkr.ecr.us-east-1.amazonaws.com/admin.test.com:latest
 ```
 
 ### Staging
@@ -306,7 +306,7 @@ tool, but for now a manual way works well.
 # Use EC2 instance's Elastic IP - dns directs to cloudflare
 ssh ubuntu@3.221.72.42 -i ~/Downloads/ec2.pem
 # Once logged in
-$(aws ecr get-login --no-include-email --region us-east-1) && docker pull 711300859214.dkr.ecr.us-east-1.amazonaws.com/admin.flat.mx:latest
+$(aws ecr get-login --no-include-email --region us-east-1) && docker pull 711300859214.dkr.ecr.us-east-1.amazonaws.com/admin.test.com:latest
 docker-compose down
 docker-compose up -d
 ```
@@ -320,7 +320,7 @@ tool, but for now a manual way works well.
 # Use EC2 instance's Elastic IP - dns directs to cloudflare
 ssh ubuntu@52.205.115.138 -i ~/Downloads/ec2.pem
 # Once logged in
-$(aws ecr get-login --no-include-email --region us-east-1) && docker pull 711300859214.dkr.ecr.us-east-1.amazonaws.com/admin.flat.mx:latest
+$(aws ecr get-login --no-include-email --region us-east-1) && docker pull 711300859214.dkr.ecr.us-east-1.amazonaws.com/admin.test.com:latest
 docker-compose down
 docker-compose up -d
 ```
@@ -342,7 +342,7 @@ docker run -it \
     -e POSTGRESQL_DB_NAME=postgres \
     -e POSTGRESQL_HOST=postgres \
     -e POSTGRESQL_USER=postgres \
-    admin.flat.mx:latest python manage.py migrate
+    admin.test.com:latest python manage.py migrate
 
 # You'll probably need to add fixtures, you can do so with `python manage.py loaddata all.json`
 
@@ -355,7 +355,7 @@ docker run -p 80:8000 -it \
     -e POSTGRESQL_USER=postgres \
     -e GOOGLE_LOGIN_CLIENT_ID=myclientid \
     -e GOOGLE_LOGIN_SECRET_KEY=mysecretkey \
-    admin.flat.mx:latest
+    admin.test.com:latest
 ```
 ## Troubleshooting checklist
 
